@@ -45,6 +45,44 @@ SizeData_C_scaled <- SizeData_C %>%
 #merge countdata and size data
 merged_data <- left_join(SizeData_C_scaled, CountData_C_extd, by = c("day", "tube"))
 
+#analyze the size and abundance relationship
+# List of relevant stages and their corresponding abundance columns
+stages <- c("F", "FM", "SM", "tritos","protos","larvae","eggs", "Qtritos", 
+            "Qprotos", "Qlarvae","deutos", "Qdeutos")
+abundance_cols <- c("noeggs", "nojuveniles","nototal")
+
+# Function to create one plot per stage
+plot_list <- map2(
+  .x = stages,
+  .y = abundance_cols,
+  .f = function(stage, abundance) {
+    
+    # Filter out missing values
+    df <- merged_data %>%
+      filter(!is.na(.data[[stage]]), !is.na(.data[[abundance]]))
+    
+    # Create ggplot
+    ggplot(df, aes(x = .data[[abundance]], y = .data[[stage]])) +
+      geom_point(alpha = 0.4, color = "steelblue") +
+      geom_smooth(method = "lm", se = TRUE, color = "darkred") +
+      labs(
+        title = paste("Stage:", str_to_title(stage)),
+        x = paste("Abundance of", abundance),
+        y = paste("Scaled size of", stage)
+      ) +
+      theme_minimal()
+  }
+)
+
+# Combine plots (adjust layout as needed)
+combined_plot <- wrap_plots(plot_list, ncol = 2)
+
+# Save or display
+ggsave("Results/size_vs_abundance.png", combined_plot, width = 10, height = 8, dpi = 300)
+print(combined_plot)
+
+
+
 panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...) {
   usr <- par("usr")
   on.exit(par(usr))
