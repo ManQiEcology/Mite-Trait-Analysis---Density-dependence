@@ -11,7 +11,7 @@ library(yardstick)
 library(tidyverse)
 library(patchwork)
 library(forcats)
-
+library(minpack.lm)
 setwd(here())
 
 ################################################################################
@@ -40,9 +40,11 @@ logistic_model <- function(day, K, N0, r) {
 #fit the logistic model and plot the population dynamic
 # Create an empty list to store plots
 day_eq<-NULL
+day_half_K <- NULL
 plot_list <- list()
 fit_model<-list()
 CountData_C_extd <- NULL
+K_ID<-NULL
    for (tubeID in c(3,5,8)) {
      CountData_CTtube<-subset(CountData,tube==tubeID)
      
@@ -64,10 +66,12 @@ CountData_C_extd <- NULL
       #get the day that population achieve equalibrium (95% of carrying capacity)
       params <- coef(N_fit)
       K <- params["K"]
+      K_ID<-rbind(K_ID,K)
       target_N <- 0.99 * K
       day_eq_tubeID <- CountData_CTtube$day[min(which(CountData_CTtube$N_fit>=target_N))]
+      day_half_K_tubeID <- CountData_CTtube$day[min(which(CountData_CTtube$N_fit>=(K/2)))]
       day_eq <- c(day_eq,day_eq_tubeID)
-      
+      day_half_K <- c(day_half_K, day_half_K_tubeID)
       # Plot the time series with the fitted logistic model
       p<-ggplot(CountData_CTtube, aes(x = day)) +
          geom_line(aes(y = nototal), color = "blue", size = 1) +
@@ -85,6 +89,8 @@ CountData_C_extd <- NULL
    }
 
 names(day_eq)<-c("tube_3","tube_5","tube_8")
+names(day_half_K)<-c("tube_3","tube_5","tube_8")
+names(K_ID)<-c("tube_3","tube_5","tube_8")
 
 # Combine into a 1x3 layout
 combined_plot_for_population_dynamics <- plot_list[[3]] + plot_list[[5]] + plot_list[[8]]+
@@ -96,16 +102,27 @@ ggsave("Results/Population_dynamics_fitted_with_logistic_model.tiff",
   
 #-------------------------------------------------------------------------------
    #mark the equilibrium status on CountData_C_extd
+CountData_C_extd$q<-NULL
+CountData_C_extd$K_hat<-NULL
+CountData_C_extd$Equ<-NULL
    for (tubeID in c(3,5,8)) {
      rowID<-which(CountData_C_extd$tube==tubeID)
-     
      #get the threshold of abundance beyond which equilibrium was achieved
      day_eq_tubeID<-day_eq[paste("tube_",tubeID,sep = "")]
+     day_half_K_tubeID<-day_half_K[paste("tube_",tubeID,sep = "")]
      
      for (i in 1:(length(rowID))) {
-       ifelse(CountData_C_extd$day[rowID[i]]<=day_eq_tubeID, 
-              CountData_C_extd$Equ[rowID[i]]<-"Pre-equ", 
-              CountData_C_extd$Equ[rowID[i]]<-"Post-equ")  
+       CountData_C_extd$q[rowID[i]]<-CountData_C_extd$nototal[rowID[i]]/K_ID[paste("tube_",tubeID,sep = "")]
+       CountData_C_extd$K_hat[rowID[i]]<-K_ID[paste("tube_",tubeID,sep = "")]
+       if(CountData_C_extd$day[rowID[i]]<day_half_K_tubeID) {
+         CountData_C_extd$Equ[rowID[i]]<-"Less than half K"
+       }
+       else if (CountData_C_extd$day[rowID[i]]>=day_eq_tubeID) {
+         CountData_C_extd$Equ[rowID[i]]<-"Equilibrium"  
+       }
+       else{
+         CountData_C_extd$Equ[rowID[i]]<-"Half K to K"  
+       }
      }
    }
 
@@ -176,7 +193,7 @@ interpolated_data<-NULL
        }
 #add realized lambda to original dataset: CountData_C_extd
 CountData_C_extd$lambda<-NULL
-  for (i in 1:dim(interpolated_data[1])) {
+  for (i in 1:dim(interpolated_data)[1]) {
     day <- interpolated_data$day[i]
     tubeID <- interpolated_data$tube[i]
     row_IDD <- which(CountData_C_extd$day==day & CountData_C_extd$tube==tubeID)
@@ -189,7 +206,7 @@ CountData_C_extd$lambda<-NULL
 #calculate r with lambda
 CountData_C_extd$r<-log(CountData_C_extd$lambda)
 
-plot(data_clean$nototal, data_clean$r)
+plot(CountData_C_extd$q, CountData_C_extd$r)
 
 #Remove rows with missing Lambda values
 data_clean <- CountData_C_extd %>%
@@ -203,42 +220,40 @@ data_model <- data_clean[!outlier_condition, ]
 
 # Bin into deciles (you can increase this to 20 for more granularity)
 data_model <- data_model %>%
-  mutate(bin = cut(nototal, breaks = 20)) %>%
+  mutate(bin = cut(q, breaks = 20, include.lowest = TRUE)) %>%
   group_by(bin) %>%
-  mutate(bin_count = n()) %>%
+  mutate(bin_count = n(), weight=1/bin_count) %>%
   ungroup()
 
-# Compute meaningful weights: more weight for sparse bins
-max_count <- max(data_model$bin_count)
-data_model <- data_model %>%
-  mutate(weight = max_count / bin_count)
 
-# Replicate rows according to weight
-data_rep <- data_model[rep(1:nrow(data_model), round(data_model$weight)),]
+
 
   # Model 1: Ricker Model (with only negative density dependent effect)
-  model_Ricker<- nlsLM(r ~ d + a * (nototal+c)*exp(-b*(nototal+c)),
-                        data = data_rep,
-                        start = list(a = 0.005, b=0.01, c = -100, d = -0.05),
+  model_Ricker<- nlsLM(r ~ d + a * (q+c)*exp(-b*(q+c)),
+                        data = data_model,
+                        weights = weight,
+                        start = list(a = 0.02, b=0.04, c = -0.25, d = -0.05),
                        #lower = c(a = 0.003, b = 0.008, c = -150, d = -0.03),
                        #upper = c(a = 0.007, b = 0.012, c = -50, d = -0.07),
                        control = nls.lm.control(maxiter = 500))
   
   # Model 2: Modified Beverton-Halt Model(with Allee effect and negative density dependent effect)
   model_Mberverton_halt <- nlsLM(
-    r ~ e + (a * (nototal)^(d - 1)) / (1 + b * (nototal)^d),
-    data = data_rep_sub,
-    start = list(a = 0.0006, b = 0.00001, d = 3, e = -0.15),
-    #lower = c(a = 0.0004, b = 0.000008, d = 2.4, e = -0.19),
-    #upper = c(a = 0.0008, b = 0.000012, d = 3.6, e = -0.11),
+    r ~ e + (a * (q+c)^(d - 1)) / (1 + b * (q+c)^d),
+    data = data_model,
+    weights = weight,
+    start = list(a = 0.24, b = 0.00004, c= -0.1, d = 2, e = -0.15),
+    #lower = c(a = 0.0002, b = 0.000006,c=-49 d = 2.2, e = -0.21),
+    #upper = c(a = 0.0010, b = 0.000014, c=-30, d = 3.8, e = -0.09),
     control = nls.lm.control(maxiter = 500)
   )
   
   
   # Predict r from all models
-  data_clean <- data_clean %>%
-    mutate(pred_Ricker = predict(model_Ricker, newdata=data_clean),
-           pred_M_BH   = predict(model_Mberverton_halt, newdata=data_clean))
+  data_model <- data_model %>%
+    mutate(pred_Ricker = predict(model_Ricker, newdata=data_model),
+           pred_M_BH   = predict(model_Mberverton_halt, newdata=data_model))
+  
   
   # Define RMSE manually
   rmse <- function(actual, predicted) {
@@ -246,26 +261,70 @@ data_rep <- data_model[rep(1:nrow(data_model), round(data_model$weight)),]
   }
   
   # Apply it to your models
-  rmse_Ricker <- rmse(log(data_clean$lambda), data_clean$pred_Ricker)
-  rmse_M_BH    <- rmse(log(data_clean$lambda), data_clean$pred_M_BH)
+  rmse_Ricker <- rmse(data_model$r, data_model$pred_Ricker)
+  rmse_M_BH    <- rmse(data_model$r, data_model$pred_M_BH)
   
  
   
   print(paste("RMSE - Ricker: ", round(rmse_Ricker, 4)))
   print(paste("RMSE - Modified Beverton Halt:", round(rmse_M_BH, 4)))
   
-  data_clean$tube<-as.factor(data_clean$tube)
+  
+  data_model$tube<-as.factor(data_model$tube)
+  
+  library(dplyr)
+  
+  set.seed(123)
+  
+  # Prediction grid
+  newdat <- data.frame(
+    q = seq(min(data_model$q), max(data_model$q), length.out = 200)
+  )
+  
+  # Function to refit model and predict
+  boot_fun <- function(dat, idx) {
+    d <- dat[idx, ]
+    
+    fit <- try(
+      nlsLM(
+        r ~ d + a * (q + c) * exp(-b * (q + c)),
+        data = d,
+        weights = weight,
+        start = list(a = 0.005, b = 0.01, c = -100, d = -0.05),
+        control = nls.lm.control(maxiter = 500)
+      ),
+      silent = TRUE
+    )
+    
+    if (inherits(fit, "try-error")) return(rep(NA, nrow(newdat)))
+    
+    predict(fit, newdata = newdat)
+  }
+  
+  # Bootstrap resampling
+  B <- 1000
+  boot_preds <- replicate(B, boot_fun(data_model, sample(seq_len(nrow(data_model)), replace = TRUE)))
+  
+  # Remove failed fits
+  boot_preds <- boot_preds[, colSums(is.na(boot_preds)) == 0, drop = FALSE]
+  
+  # Summarize confidence band
+  newdat$fit <- rowMeans(boot_preds)
+  newdat$lwr <- apply(boot_preds, 1, quantile, probs = 0.025)
+  newdat$upr <- apply(boot_preds, 1, quantile, probs = 0.975)
+  
   # Plot results
-  r_vs_N <- ggplot(data_clean, aes(x = nototal, color = tube)) +
+  r_vs_N <- ggplot(data_model, aes(x = q, color = tube)) +
     geom_point(aes(y = r), alpha = 0.4) +
-    geom_line(aes(y = pred_Ricker), color = "blue", linetype = "dashed") +
-    geom_line(aes(y = pred_M_BH), color = "green") +
-    geom_point(data = subset(data_clean, r > 0.4 & nototal < 200), 
-               aes(x = nototal, y = r), 
-               color = "black", size = 3, shape = 1)+
+    geom_line(aes(y = pred_Ricker), color = "black", linetype = "solid") +
+    geom_ribbon(data = newdat, aes(x=q, ymin = lwr, ymax = upr), inherit.aes = FALSE, alpha = 0.2, fill="gray") +
+    #geom_line(aes(y = pred_M_BH), color = "green") +
+    #geom_point(data = subset(data_model, r > 0.4 & nototal < 200), 
+    #           aes(x = nototal, y = r), 
+    #           color = "black", size = 3, shape = 1)+
     labs(title =NULL,
-         y = "Population growth rate", 
-         x = "Population size",
+         y = "Population growth rate (r)", 
+         x = "Relative density (N/K)",
          fill= "Population ID") +
     theme_minimal()+   # Use a minimal base theme
     theme(
@@ -278,7 +337,7 @@ data_rep <- data_model[rep(1:nrow(data_model), round(data_model$weight)),]
     )
   
   ggsave("Results/r_vs_N.tiff", 
-         r_vs_N, width = 3, height = 2, dpi = 600, compression = "lzw")
+         r_vs_N, width = 3, height = 3, dpi = 600, compression = "lzw")
   
 ################################################################################
 #plot population structure dynamic across tubes
@@ -372,11 +431,12 @@ proportion_stage_group2<-
        x = "Day",
        y = "Proportion \n of each stage group",
        color = "Stage group") +
+  ylim(0,1)+
   theme_minimal() +
   theme(
     strip.text = element_blank(),
     axis.text.x = element_text(),
-    legend.position = c(0.95,0.91),
+    legend.position = c(0.2,0.81),
     panel.background = element_blank(),         # Remove panel background
     panel.grid.minor = element_blank(),         # Remove minor grid lines
     panel.grid.major = element_blank(),         # Optionally remove major grid
@@ -388,8 +448,13 @@ proportion_stage_group2<-
 population_structure1 <- count_stage_group / proportion_stage_group1+  # Stack vertically
 plot_annotation(tag_levels = "a")  # Automatically labels "a", "b", "c"
 # Save to file
-population_structure2 <- count_stage_group / proportion_stage_group2+  # Stack vertically
-  plot_annotation(tag_levels = "a")  # Automatically labels "a", "b", "c"
+population_structure2 <- (
+  r_vs_N | (count_stage_group / proportion_stage_group2)
+) +
+  plot_layout(widths = c(1, 2)) +
+  plot_annotation(tag_levels = "a")
+
+
 # Save to file
 ggsave("Results/population_structure1.tiff", 
        population_structure1, width = 7, height = 5, dpi = 600, compression = "lzw")
