@@ -349,6 +349,12 @@ long_data <- CountData_C_extd %>%
                names_to = "stage_group", 
                values_to = "count")
   
+  long_data <- CountData_C_extd %>%
+    pivot_longer(cols = c( noeggs, nojuveniles, noF, noFM, noSM),  # Specify all stage group columns here
+                 names_to = "stage_group", 
+                 values_to = "count")
+  
+  
 # Calculate total count per tube and day
 long_data <- long_data %>%
   group_by(tube, day) %>%
@@ -361,6 +367,8 @@ long_data$stage_group <- fct_recode(long_data$stage_group,
                                     "Eggs" = "noeggs",
                                     "Juveniles" = "nojuveniles",
                                     "Adults" = "noadults")
+
+long_data$stage_group<-factor(long_data$stage_group, levels=c("noeggs", "nojuveniles", "noF", "noSM", "noFM"))
 
 # Plot totalno vs day, with totalno composed of individuals from each stage group, and tube as a factor
 # Prepare a unique dataset for N_fit line (one per day & tube)
@@ -436,13 +444,16 @@ proportion_stage_group2<-
   theme(
     strip.text = element_blank(),
     axis.text.x = element_text(),
-    legend.position = c(0.2,0.81),
+    legend.position= c(0.52,0.9),
+    legend.direction = "horizontal",
     panel.background = element_blank(),         # Remove panel background
     panel.grid.minor = element_blank(),         # Remove minor grid lines
     panel.grid.major = element_blank(),         # Optionally remove major grid
     axis.line = element_line(color = "black"),  # Draw x and y axes
     axis.ticks = element_line(color = "black")  # Show axis ticks
-  )
+  )+
+  guides(
+    colour = guide_legend(nrow = 2, byrow = TRUE))
 
 # combine the count and proportion plot
 population_structure1 <- count_stage_group / proportion_stage_group1+  # Stack vertically
@@ -456,10 +467,12 @@ population_structure2 <- (
 
 
 # Save to file
-ggsave("Results/population_structure1.tiff", 
+ggsave("Results/population_structure1_1.tiff", 
        population_structure1, width = 7, height = 5, dpi = 600, compression = "lzw")
-ggsave("Results/population_structure2.tiff", 
+ggsave("Results/population_structure2_1.tiff", 
        population_structure2, width = 7, height = 5, dpi = 600, compression = "lzw")
+ggsave("Results/proportion_stage_group2.tiff", 
+       proportion_stage_group2, width = 5, height = 3, dpi = 600, compression = "lzw")
 
 ###########################################################################
 

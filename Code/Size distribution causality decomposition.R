@@ -317,12 +317,13 @@ decompose_window_transition <- function(tube_i,
   msp <- simulate_scenario(to_counts, to_pools, B = B, Nsim = Nsim)
   
   # symmetric decomposition
-  S <- 0.5 * ((ms - m0) + (msp - mp))
-  P <- 0.5 * ((mp - m0) + (msp - ms))
-  I <- msp - m0 - S - P
+  S <- 0.5 * ((ms - m0) + (msp - mp)) #follow Shapley decomposition, interaction is evenly divided by S and P
+  P <- 0.5 * ((mp - m0) + (msp - ms)) #follow Shapley decomposition, interaction is evenly divided by S and P
+  I <- msp + m0 - ms - mp
+  I_rel <- abs(I)/(abs(ms-m0)+abs(mp-m0)+abs(I)) # relative importance of interaction across windows
   
   total <- msp - m0
-  abs_sum <- abs(S) + abs(P) + abs(I)
+  abs_sum <- abs(S) + abs(P)
   
   q_mid <- mean(c(
     mean(df_tube$q[from_idx], na.rm = TRUE),
@@ -344,8 +345,10 @@ decompose_window_transition <- function(tube_i,
     plasticity_effect = as.numeric(P),
     interaction_effect = as.numeric(I),
     structure_share_abs = ifelse(abs_sum == 0, NA_real_, 100 * abs(S) / abs_sum),
+    structure_share_drt = ifelse(abs_sum == 0, NA_real_, 100 * S / abs_sum),
     plasticity_share_abs = ifelse(abs_sum == 0, NA_real_, 100 * abs(P) / abs_sum),
-    interaction_share_abs = ifelse(abs_sum == 0, NA_real_, 100 * abs(I) / abs_sum)
+    plasticity_share_drt = ifelse(abs_sum == 0, NA_real_, 100 * P / abs_sum),
+    interaction =  I_rel
   )
 }
 
@@ -385,6 +388,23 @@ library(patchwork)
 decomp_long <- decomp_results %>%
   pivot_longer(
     cols = c(structure_share_abs, plasticity_share_abs),
+    names_to = "component",
+    values_to = "share"
+  ) %>%
+  mutate(
+    component = recode(
+      component,
+      structure_share_abs  = "Structure",
+      plasticity_share_abs = "Plasticity"
+    ),
+    component = factor(component, levels = c("Structure", "Plasticity")),
+    metric = factor(metric, levels = c("Mean", "CV", "Skewness")),
+    tube = factor(tube)
+  )
+
+decomp_long_drt <- decomp_results %>%
+  pivot_longer(
+    cols = c(structure_share_drt, plasticity_share_drt),
     names_to = "component",
     values_to = "share"
   ) %>%
